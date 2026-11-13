@@ -1,42 +1,23 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import { request } from '@/api/client'
+import VersionDiffModal from '@/components/VersionDiffModal'
 
 const ENDPOINT = '/api/backfill'
 const columns = [
   "批次编号",
   "目标表名",
+  "重跑状态",
   "开始日期",
   "结束日期",
-  "并行数量",
+  "关联血缘节点",
+  "引用节点版本",
   "覆盖模式",
-  "重跑状态",
-  "异常区间"
 ]
 const actions = [
   "启动重跑",
   "暂停重跑",
   "归档批次"
-]
-const statuses = [
-  "草稿",
-  "运行中",
-  "已暂停",
-  "已完成"
-]
-const stats = [
-  {
-    "label": "重跑批次总数",
-    "value": 0
-  },
-  {
-    "label": "运行中批次",
-    "value": 0
-  },
-  {
-    "label": "已暂停批次",
-    "value": 0
-  }
 ]
 
 type Row = Record<string, string | number | null>
@@ -46,7 +27,8 @@ export default function BackfillView() {
   const [total, setTotal] = useState(0)
   const [errorMessage, setErrorMessage] = useState('')
   const [filters, setFilters] = useState<Record<string, string>>({})
-  const filterFields = useMemo(() => columns.slice(0, 3), [])
+  const [diffBatchId, setDiffBatchId] = useState<number | null>(null)
+  const filterFields = useMemo(() => ["批次编号", "目标表名", "重跑状态"], [])
 
   const reload = useCallback(async () => {
     setErrorMessage('')
@@ -68,15 +50,23 @@ export default function BackfillView() {
     void reload()
   }, [reload])
 
+  const stats = useMemo(() => [
+    { label: '重跑批次总数', value: rows.length },
+    { label: '运行中批次', value: rows.filter((row) => row.重跑状态 === '运行中').length },
+    { label: '草稿批次', value: rows.filter((row) => row.重跑状态 === '草稿').length },
+    { label: '已完成批次', value: rows.filter((row) => row.重跑状态 === '已完成').length },
+  ], [rows])
+
   async function runAction(action: string, row: Row) {
     setErrorMessage('')
     try {
       const response = await request(`${ENDPOINT}/${row.id}/actions`, {
         method: 'POST',
-        body: JSON.stringify({ action }),
+        body: JSON.stringify({ values: { action } }),
       })
-      if (!response.ok) {
-        throw new Error('历史重跑动作未生效，请稍后重试')
+      const payload = await response.json()
+      if (!response.ok || payload.ok === false) {
+        throw new Error(payload.detail || payload.message || '历史重跑动作未生效，请稍后重试')
       }
       await reload()
     } catch (error) {
@@ -89,12 +79,12 @@ export default function BackfillView() {
       <header className="page-head">
         <div>
           <h2>历史重跑管理</h2>
-          <p className="page-desc">维护历史重跑批次的日期范围、并行参数与状态追踪，为数据补数提供可验证的数据工程流程。</p>
+          <p className="page-desc">
+            每个补数批次都钉住发起时的血缘节点版本与映射快照；已开始的批次继续由旧版本服务，
+            新批次使用新版本，可逐批查看引用版本与当前版本差异。
+          </p>
         </div>
         <div className="page-actions">
-          <button className="btn primary" type="button" onClick={() => setErrorMessage('重跑批次登记入口尚未接入审批流')}>
-            登记重跑批次
-          </button>
           <button className="btn" type="button" onClick={() => window.open(`${ENDPOINT}/export`, '_blank')}>
             导出历史重跑清单
           </button>
@@ -129,6 +119,7 @@ export default function BackfillView() {
         <thead>
           <tr>
             {columns.map((column) => <th key={column}>{column}</th>)}
+            <th>版本差异</th>
             <th>可执行动作</th>
           </tr>
         </thead>
@@ -136,6 +127,11 @@ export default function BackfillView() {
           {rows.map((row) => (
             <tr key={String(row.id)}>
               {columns.map((column) => <td key={column}>{row[column] ?? '—'}</td>)}
+              <td>
+                <button className="link" type="button" onClick={() => setDiffBatchId(Number(row.id))}>
+                  查看引用版本差异
+                </button>
+              </td>
               <td className="row-actions">
                 {actions.map((action) => (
                   <button key={action} className="link" type="button" onClick={() => void runAction(action, row)}>
@@ -147,7 +143,7 @@ export default function BackfillView() {
           ))}
           {rows.length === 0 && (
             <tr>
-              <td className="empty-state" colSpan={columns.length + 1}>暂无历史重跑数据，可先登记重跑批次</td>
+              <td className="empty-state" colSpan={columns.length + 2}>暂无历史重跑数据</td>
             </tr>
           )}
         </tbody>
@@ -157,6 +153,8 @@ export default function BackfillView() {
         <span>共 {total} 条历史重跑记录</span>
         {errorMessage && <span className="error-text">{errorMessage}</span>}
       </footer>
+
+      <VersionDiffModal open={diffBatchId !== null} batchId={diffBatchId} onClose={() => setDiffBatchId(null)} />
     </section>
   )
 }

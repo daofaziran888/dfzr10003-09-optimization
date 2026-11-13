@@ -30,22 +30,13 @@ def list_entries(
     return PageResult(items=items, total=total, page=page, size=size)
 
 
-@router.get("/{entry_id}", response_model=dict)
-def get_entry(entry_id: int) -> dict:
-    """读取单条重跑批次明细；不存在时给出可读的错误说明。"""
-    entry = service.get_entry(entry_id)
-    if entry is None:
-        raise HTTPException(status_code=404, detail=f"重跑批次 {entry_id} 不存在或已归档")
-    return entry
-
-
 @router.post("", response_model=ActionResult)
 def create_entry(payload: EntryPayload) -> ActionResult:
-    """登记一条重跑批次，缺字段时说明原因而不是静默丢弃。"""
+    """登记一条重跑批次，缺字段时说明原因而不是静默丢弃；新批次自动钉住节点当前生效版本。"""
     entry, missing = service.create_entry(payload.values)
     if missing:
         return ActionResult(ok=False, message=f"缺少必填字段：{'、'.join(missing)}")
-    return ActionResult(ok=True, message="重跑批次已登记", entry=entry)
+    return ActionResult(ok=True, message="重跑批次已登记，引用版本已锁定", entry=entry)
 
 
 @router.post("/{entry_id}/actions", response_model=ActionResult)
@@ -63,3 +54,21 @@ def export_entries() -> dict[str, Any]:
     """导出历史重跑清单：返回当前过滤条件下的全量数据。"""
     items, total = service.list_entries(page=1, size=10000)
     return {"module": "backfill", "total": total, "items": items}
+
+
+@router.get("/{entry_id}/version-diff", response_model=dict)
+def version_diff(entry_id: int) -> dict[str, Any]:
+    """指出该重跑批次引用的节点版本，以及与当前新版本的映射差异。"""
+    diff = service.version_diff(entry_id)
+    if diff is None:
+        raise HTTPException(status_code=404, detail=f"重跑批次 {entry_id} 不存在或已归档")
+    return diff
+
+
+@router.get("/{entry_id}", response_model=dict)
+def get_entry(entry_id: int) -> dict:
+    """读取单条重跑批次明细；不存在时给出可读的错误说明。"""
+    entry = service.get_entry(entry_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail=f"重跑批次 {entry_id} 不存在或已归档")
+    return entry

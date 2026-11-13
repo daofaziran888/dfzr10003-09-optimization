@@ -18,6 +18,7 @@ class MetadataService:
         *,
         keyword: str | None = None,
         status: str | None = None,
+        review_status: str | None = None,
         page: int = 1,
         size: int = 20,
     ) -> tuple[list[dict[str, Any]], int]:
@@ -26,9 +27,18 @@ class MetadataService:
             rows = [row for row in rows if keyword in str(row.get("记录编号", ""))]
         if status:
             rows = [row for row in rows if row.get("status") == status]
+        if review_status:
+            rows = [row for row in rows if str(row.get("复核状态", "") or "") == review_status]
         total = len(rows)
         start = max(page - 1, 0) * size
         return rows[start:start + size], total
+
+    def review_queue(self) -> list[dict[str, Any]]:
+        """待复核清单：血缘映射变更后由影响分析写入的目录记录都在这里。"""
+        return [
+            row for row in store.rows(MODULE)
+            if str(row.get("复核状态", "") or "") == "待复核"
+        ]
 
     def get_entry(self, entry_id: int) -> dict[str, Any] | None:
         return store.find(MODULE, entry_id)
@@ -43,6 +53,8 @@ class MetadataService:
         entry["status"] = STATUS_ORDER[0]
         entry["pending"] = True
         entry["abnormal"] = False
+        entry.setdefault("复核状态", "")
+        entry.setdefault("影响批次", "")
         rows.append(entry)
         return entry, []
 

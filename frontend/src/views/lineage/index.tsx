@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import { request } from '@/api/client'
+import { fetchImpactBatch, type ImpactBatch, type ImpactResult } from '@/api/impact'
+import AnalyzeModal from '@/components/AnalyzeModal'
+import ImpactBatchModal from '@/components/ImpactBatchModal'
 
 const ENDPOINT = '/api/lineage'
 const columns = [
@@ -10,33 +13,13 @@ const columns = [
   "上游节点",
   "下游节点",
   "字段映射",
-  "转换逻辑",
-  "图谱版本"
+  "图谱版本",
+  "生效时间",
 ]
 const actions = [
   "提交审批",
   "发布节点",
   "废弃节点"
-]
-const statuses = [
-  "草稿",
-  "待审批",
-  "已生效",
-  "已废弃"
-]
-const stats = [
-  {
-    "label": "血缘节点总数",
-    "value": 0
-  },
-  {
-    "label": "已生效节点",
-    "value": 0
-  },
-  {
-    "label": "待审批节点",
-    "value": 0
-  }
 ]
 
 type Row = Record<string, string | number | null>
@@ -46,6 +29,9 @@ export default function LineageView() {
   const [total, setTotal] = useState(0)
   const [errorMessage, setErrorMessage] = useState('')
   const [filters, setFilters] = useState<Record<string, string>>({})
+  const [analyzeTarget, setAnalyzeTarget] = useState<Row | null>(null)
+  const [impactBatches, setImpactBatches] = useState<Record<string, ImpactBatch[]>>({})
+  const [openedBatch, setOpenedBatch] = useState<ImpactBatch | null>(null)
   const filterFields = useMemo(() => columns.slice(0, 3), [])
 
   const reload = useCallback(async () => {
@@ -57,26 +43,56 @@ export default function LineageView() {
         throw new Error('血缘节点列表读取失败')
       }
       const payload = await response.json()
-      setRows(payload.items ?? [])
+      const items = (payload.items ?? []) as Row[]
+      setRows(items)
       setTotal(payload.total ?? 0)
+      await loadBatchMap(items)
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : '血缘图谱列表读取失败')
     }
   }, [filters])
 
+  const loadBatchMap = useCallback(async (items: Row[]) => {
+    const entries = await Promise.all(
+      items.map(async (row) => {
+        const code = String(row.节点编号 ?? '')
+        if (!code) {
+          return [code, []] as const
+        }
+        try {
+          const batches = await fetchImpactBatch(code)
+          return [code, batches] as const
+        } catch {
+          return [code, []] as const
+        }
+      }),
+    )
+    setImpactBatches(Object.fromEntries(entries))
+  }, [])
+
   useEffect(() => {
     void reload()
   }, [reload])
+
+  const stats = useMemo(() => [
+    { label: '血缘节点总数', value: rows.length },
+    { label: '已生效节点', value: rows.filter((row) => row.status === '已生效').length },
+    { label: '待审批节点', value: rows.filter((row) => row.status === '待审批').length },
+    { label: '待处理影响批次', value: Object.values(impactBatches)
+      .flat()
+      .filter((batch) => batch.状态 === '待处理').length },
+  ], [rows, impactBatches])
 
   async function runAction(action: string, row: Row) {
     setErrorMessage('')
     try {
       const response = await request(`${ENDPOINT}/${row.id}/actions`, {
         method: 'POST',
-        body: JSON.stringify({ action }),
+        body: JSON.stringify({ values: { action } }),
       })
-      if (!response.ok) {
-        throw new Error('血缘图谱动作未生效，请稍后重试')
+      const payload = await response.json()
+      if (!response.ok || payload.ok === false) {
+        throw new Error(payload.detail || payload.message || '血缘图谱动作未生效，请稍后重试')
       }
       await reload()
     } catch (error) {
@@ -84,17 +100,33 @@ export default function LineageView() {
     }
   }
 
+  function handleAnalyzed(result: ImpactResult, message: string) {
+    setAnalyzeTarget(null)
+    setOpenedBatch(result.batch)
+    setErrorMessage(message)
+    void reload()
+  }
+
+  function openLatestBatch(row: Row) {
+    const code = String(row.节点编号 ?? '')
+    const batches = impactBatches[code] ?? []
+    if (batches.length === 0) {
+      setErrorMessage('该节点尚未发起过影响分析')
+      return
+    }
+    setOpenedBatch(batches[0])
+  }
+
   return (
     <section className="page" data-module="lineage">
       <header className="page-head">
         <div>
           <h2>血缘图谱管理</h2>
-          <p className="page-desc">维护血缘图谱的节点依赖、字段映射与转换记录，为数据溯源提供可审计的数据工程流程。</p>
+          <p className="page-desc">
+            维护血缘节点的依赖与字段映射；发布前先做影响分析，逐项确认上游、下游、映射、元数据与重跑批次后才能落版。
+          </p>
         </div>
         <div className="page-actions">
-          <button className="btn primary" type="button" onClick={() => setErrorMessage('血缘节点登记入口尚未接入审批流')}>
-            登记血缘节点
-          </button>
           <button className="btn" type="button" onClick={() => window.open(`${ENDPOINT}/export`, '_blank')}>
             导出血缘图谱清单
           </button>
@@ -129,25 +161,55 @@ export default function LineageView() {
         <thead>
           <tr>
             {columns.map((column) => <th key={column}>{column}</th>)}
+            <th>影响分析</th>
             <th>可执行动作</th>
           </tr>
         </thead>
         <tbody>
-          {rows.map((row) => (
-            <tr key={String(row.id)}>
-              {columns.map((column) => <td key={column}>{row[column] ?? '—'}</td>)}
-              <td className="row-actions">
-                {actions.map((action) => (
-                  <button key={action} className="link" type="button" onClick={() => void runAction(action, row)}>
-                    {action}
-                  </button>
-                ))}
-              </td>
-            </tr>
-          ))}
+          {rows.map((row) => {
+            const code = String(row.节点编号 ?? '')
+            const nodeBatches = impactBatches[code] ?? []
+            const openBatch = nodeBatches.find((batch) => batch.状态 === '待处理')
+            return (
+              <tr key={String(row.id)}>
+                {columns.map((column) => <td key={column}>{row[column] ?? '—'}</td>)}
+                <td>
+                  <div className="impact-cell">
+                    {openBatch ? (
+                      <span className="tag warn">待处理批次 {openBatch.批次编号}</span>
+                    ) : nodeBatches.length > 0 ? (
+                      <span className="tag ok">已闭环 {nodeBatches[0].批次编号}</span>
+                    ) : (
+                      <span className="muted">未分析</span>
+                    )}
+                    {row.待生效映射 && (
+                      <span className="tag info" title={`待生效：${String(row.待生效映射)}`}>
+                        待生效 {String(row.待生效版本 ?? '')}
+                      </span>
+                    )}
+                    <span className="row-actions">
+                      <button className="link" type="button" onClick={() => setAnalyzeTarget(row)}>
+                        影响分析
+                      </button>
+                      <button className="link" type="button" onClick={() => openLatestBatch(row)}>
+                        影响清单
+                      </button>
+                    </span>
+                  </div>
+                </td>
+                <td className="row-actions">
+                  {actions.map((action) => (
+                    <button key={action} className="link" type="button" onClick={() => void runAction(action, row)}>
+                      {action}
+                    </button>
+                  ))}
+                </td>
+              </tr>
+            )
+          })}
           {rows.length === 0 && (
             <tr>
-              <td className="empty-state" colSpan={columns.length + 1}>暂无血缘图谱数据，可先登记血缘节点</td>
+              <td className="empty-state" colSpan={columns.length + 2}>暂无血缘图谱数据</td>
             </tr>
           )}
         </tbody>
@@ -157,6 +219,19 @@ export default function LineageView() {
         <span>共 {total} 条血缘图谱记录</span>
         {errorMessage && <span className="error-text">{errorMessage}</span>}
       </footer>
+
+      <AnalyzeModal
+        open={analyzeTarget !== null}
+        row={analyzeTarget}
+        onClose={() => setAnalyzeTarget(null)}
+        onAnalyzed={handleAnalyzed}
+      />
+      <ImpactBatchModal
+        open={openedBatch !== null}
+        batch={openedBatch}
+        onClose={() => setOpenedBatch(null)}
+        onChanged={() => void reload()}
+      />
     </section>
   )
 }

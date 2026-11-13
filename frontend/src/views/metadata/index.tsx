@@ -9,34 +9,9 @@ const columns = [
   "字段名称",
   "字段类型",
   "业务含义",
-  "统计信息",
-  "更新频率",
-  "负责人"
-]
-const actions = [
-  "提交审批",
-  "发布元数据",
-  "废弃元数据"
-]
-const statuses = [
-  "草稿",
-  "待审批",
-  "已生效",
-  "已废弃"
-]
-const stats = [
-  {
-    "label": "元数据记录总数",
-    "value": 0
-  },
-  {
-    "label": "已生效记录",
-    "value": 0
-  },
-  {
-    "label": "待审批记录",
-    "value": 0
-  }
+  "负责人",
+  "复核状态",
+  "影响批次",
 ]
 
 type Row = Record<string, string | number | null>
@@ -46,13 +21,17 @@ export default function MetadataView() {
   const [total, setTotal] = useState(0)
   const [errorMessage, setErrorMessage] = useState('')
   const [filters, setFilters] = useState<Record<string, string>>({})
-  const filterFields = useMemo(() => columns.slice(0, 3), [])
+  const [reviewOnly, setReviewOnly] = useState(false)
+  const filterFields = useMemo(() => ["记录编号", "表名称", "字段名称"], [])
 
   const reload = useCallback(async () => {
     setErrorMessage('')
-    const query = new URLSearchParams(filters).toString()
+    const params = new URLSearchParams(filters)
+    if (reviewOnly) {
+      params.set('review_status', '待复核')
+    }
     try {
-      const response = await request(`${ENDPOINT}?${query}`)
+      const response = await request(`${ENDPOINT}?${params.toString()}`)
       if (!response.ok) {
         throw new Error('元数据记录列表读取失败')
       }
@@ -62,38 +41,35 @@ export default function MetadataView() {
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : '元数据目录列表读取失败')
     }
-  }, [filters])
+  }, [filters, reviewOnly])
 
   useEffect(() => {
     void reload()
   }, [reload])
 
-  async function runAction(action: string, row: Row) {
-    setErrorMessage('')
-    try {
-      const response = await request(`${ENDPOINT}/${row.id}/actions`, {
-        method: 'POST',
-        body: JSON.stringify({ action }),
-      })
-      if (!response.ok) {
-        throw new Error('元数据目录动作未生效，请稍后重试')
-      }
-      await reload()
-    } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : '元数据目录操作失败')
-    }
-  }
+  const stats = useMemo(() => [
+    { label: '元数据记录总数', value: rows.length },
+    { label: '待复核记录', value: rows.filter((row) => row.复核状态 === '待复核').length },
+    { label: '已复核记录', value: rows.filter((row) => row.复核状态 === '已复核').length },
+  ], [rows])
 
   return (
     <section className="page" data-module="metadata">
       <header className="page-head">
         <div>
           <h2>元数据目录管理</h2>
-          <p className="page-desc">维护元数据目录的字段定义、业务含义与统计信息，为数据资产盘点提供可追溯的数据工程流程。</p>
+          <p className="page-desc">
+            血缘字段映射变更后，沿「节点下游表 → 字段」依赖路径命中的目录记录自动进入待复核，
+            影响项逐项确认并关闭批次后才回到已复核，未复核期间旧业务含义持续挂账。
+          </p>
         </div>
         <div className="page-actions">
-          <button className="btn primary" type="button" onClick={() => setErrorMessage('元数据记录登记入口尚未接入审批流')}>
-            登记元数据记录
+          <button
+            className={`btn ${reviewOnly ? 'primary' : ''}`}
+            type="button"
+            onClick={() => setReviewOnly((prev) => !prev)}
+          >
+            {reviewOnly ? '显示全部记录' : '只看待复核清单'}
           </button>
           <button className="btn" type="button" onClick={() => window.open(`${ENDPOINT}/export`, '_blank')}>
             导出元数据目录清单
@@ -129,25 +105,29 @@ export default function MetadataView() {
         <thead>
           <tr>
             {columns.map((column) => <th key={column}>{column}</th>)}
-            <th>可执行动作</th>
           </tr>
         </thead>
         <tbody>
           {rows.map((row) => (
-            <tr key={String(row.id)}>
-              {columns.map((column) => <td key={column}>{row[column] ?? '—'}</td>)}
-              <td className="row-actions">
-                {actions.map((action) => (
-                  <button key={action} className="link" type="button" onClick={() => void runAction(action, row)}>
-                    {action}
-                  </button>
-                ))}
-              </td>
+            <tr key={String(row.id)} className={row.复核状态 === '待复核' ? 'row-review-pending' : ''}>
+              {columns.map((column) => (
+                <td key={column}>
+                  {column === '复核状态' ? (
+                    row[column]
+                      ? <span className={`tag ${row[column] === '待复核' ? 'warn' : 'ok'}`}>{String(row[column])}</span>
+                      : <span className="muted">—</span>
+                  ) : (
+                    row[column] ?? '—'
+                  )}
+                </td>
+              ))}
             </tr>
           ))}
           {rows.length === 0 && (
             <tr>
-              <td className="empty-state" colSpan={columns.length + 1}>暂无元数据目录数据，可先登记元数据记录</td>
+              <td className="empty-state" colSpan={columns.length}>
+                {reviewOnly ? '暂无待复核的元数据记录' : '暂无元数据目录数据'}
+              </td>
             </tr>
           )}
         </tbody>

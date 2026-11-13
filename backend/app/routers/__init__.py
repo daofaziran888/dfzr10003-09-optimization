@@ -15,6 +15,7 @@ from app.routers import factdef as router_factdef
 from app.routers import partition as router_partition
 from app.routers import quality as router_quality
 from app.routers import lineage as router_lineage
+from app.routers import impact as router_impact
 from app.routers import backfill as router_backfill
 from app.routers import metadata as router_metadata
 from app.routers import etl as router_etl
@@ -23,4 +24,4 @@ from app.routers import catalog as router_catalog
 from app.routers import monitor as router_monitor
 from app.routers import snapshot as router_snapshot
 
-ROUTERS = [router_ods, router_dwd, router_dws, router_ads, router_dimdef, router_factdef, router_partition, router_quality, router_lineage, router_backfill, router_metadata, router_etl, router_lake, router_catalog, router_monitor, router_snapshot]
+ROUTERS = [router_ods, router_dwd, router_dws, router_ads, router_dimdef, router_factdef, router_partition, router_quality, router_lineage, router_impact, router_backfill, router_metadata, router_etl, router_lake, router_catalog, router_monitor, router_snapshot]
